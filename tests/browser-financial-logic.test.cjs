@@ -476,6 +476,51 @@ async function run(name, fn) {
     return '100→200 GC dated transfers and 50 GC partial withdrawal; date edit recomputed daily compounding; deleting first transfer recalculated goal balance while account balance reconciled 500→250→350 GC';
   });
 
+
+  await run('Mobile and tablet layouts have no page-level horizontal overflow and key controls remain usable', async browser => {
+    const { page, context } = await freshPage(browser, { budget: 700, openingBalance: 500, monthlyManual: {}, transactions: [], goals: [], fixedDeposits: [], xp: 0, answered: [] });
+    const results=[];
+    for (const width of [360,390,430,768]) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('#homemetrics');
+      const home=await page.evaluate(() => ({
+        width:innerWidth, documentWidth:document.documentElement.scrollWidth,
+        bodyWidth:document.body.scrollWidth,
+        app:document.querySelector('.app')?.getBoundingClientRect().width,
+        nav:document.querySelector('.main-nav')?.getBoundingClientRect().width,
+        metrics:document.querySelector('#homemetrics')?.getBoundingClientRect().width,
+        visibleNav:!!document.querySelector('.main-nav .nav-link'),
+        balance:!!document.querySelector('#homeactualbalance')
+      }));
+      assert.ok(home.documentWidth <= width + 1, width+'px home has document horizontal overflow: '+JSON.stringify(home));
+      assert.ok(home.bodyWidth <= width + 1, width+'px body has horizontal overflow: '+JSON.stringify(home));
+      assert.ok(home.nav <= width + 1, width+'px navigation exceeds viewport');
+      assert.ok(home.visibleNav && home.balance, width+'px core home controls should be visible');
+
+      for (const view of ['save','records','fd']) {
+        const navLink=page.locator('[data-view="'+view+'"]').first();
+        if (await navLink.count()) {
+          await navLink.click();
+          await page.waitForTimeout(50);
+          const check=await page.evaluate(() => ({
+            width:innerWidth, documentWidth:document.documentElement.scrollWidth,
+            bodyWidth:document.body.scrollWidth,
+            active:document.querySelector('.view.active')?.getAttribute('id') || document.querySelector('.view:not([hidden])')?.getAttribute('id'),
+            controls:[...document.querySelectorAll('.view.active button,.view.active input,.view.active select,.view.active textarea')]
+              .filter(e=>e.getClientRects().length).map(e=>({tag:e.tagName,h:Math.round(e.getBoundingClientRect().height),w:Math.round(e.getBoundingClientRect().width)}))
+          }));
+          assert.ok(check.documentWidth <= width + 1, width+'px '+view+' view has document overflow: '+JSON.stringify(check));
+          assert.ok(check.bodyWidth <= width + 1, width+'px '+view+' view has body overflow: '+JSON.stringify(check));
+          assert.ok(check.controls.every(c=>c.h >= 30), width+'px '+view+' view has tiny touch controls: '+JSON.stringify(check.controls.filter(c=>c.h<30)));
+        }
+      }
+      results.push(width+'px viewport: no page-level horizontal overflow; home, savings, transactions, and fixed deposit controls rendered');
+    }
+    await context.close();
+    return results.join('; ');
+  });
+
   if (process.exitCode) process.exit(1);
   console.log('All Money Life browser financial logic tests passed.');
 })();
