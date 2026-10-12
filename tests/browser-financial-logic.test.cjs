@@ -239,7 +239,6 @@ async function run(name, fn) {
     assert.match((await page.locator('#alltx').innerText()), /Edited expense/);
 
     await go(page, 'records');
-    page.once('dialog', dialog => dialog.accept());
     await page.locator('#alltx [data-del-tx="' + tx.id + '"]').click();
     await page.reload();
     d = await state(page);
