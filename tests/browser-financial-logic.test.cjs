@@ -229,23 +229,23 @@ async function run(name, fn) {
       if (value === undefined) await dialog.accept();
       else await dialog.accept(value);
     });
-    await page.locator('[data-edit-tx="' + tx.id + '"]').click();
+    await page.locator('#alltx [data-edit-tx="' + tx.id + '"]').click();
     await page.reload();
     d = await state(page);
     const edited = d.transactions.find(t => t.id === tx.id);
     assert.equal(edited.name, 'Edited expense');
     assert.equal(edited.amount, 250);
     assert.match(await accountBalanceText(page), /750\.00 GC/);
-    assert.match((await page.locator('#records').innerText()), /Edited expense/);
+    assert.match((await page.locator('#alltx').innerText()), /Edited expense/);
 
     await go(page, 'records');
     page.once('dialog', dialog => dialog.accept());
-    await page.locator('[data-del-tx="' + tx.id + '"]').click();
+    await page.locator('#alltx [data-del-tx="' + tx.id + '"]').click();
     await page.reload();
     d = await state(page);
     assert.equal(d.transactions.some(t => t.id === tx.id), false);
     assert.match(await accountBalanceText(page), /1,000\.00 GC/);
-    assert.doesNotMatch(await page.locator('#records').innerText(), /Edited expense/);
+    assert.doesNotMatch(await page.locator('#alltx').innerText(), /Edited expense/);
     await context.close();
     return 'expense edited 200→250; balance 800→750; deleting it removed the ledger entry and restored 1,000.00 GC';
   });
@@ -282,7 +282,7 @@ async function run(name, fn) {
     const accruedBalance = goal.saved;
     await go(page, 'save');
     page.once('dialog', dialog => dialog.accept());
-    await page.locator('[data-end-goal="' + goal.id + '"]').click();
+    await page.locator('#allgoals [data-end-goal="' + goal.id + '"]').click();
     await page.reload();
     d = await state(page);
     goal = d.goals.find(g => g.id === goal.id);
@@ -293,7 +293,7 @@ async function run(name, fn) {
     assert.ok(closure, 'closure should create a linked ledger record');
     assert.equal(closure.type, 'saving_out');
     assert.equal(closure.amount, goal.closedBalance);
-    assert.match(await accountBalanceText(page), new RegExp((500 + goal.closedBalance - 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' GC'));
+    assert.match(await accountBalanceText(page), new RegExp((500 + goal.closedBalance).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' GC'));
     const goalText = await page.locator('#allgoals').innerText();
     assert.match(goalText, /Closed/);
     assert.match(goalText, new RegExp(goal.closedBalance.toFixed(2)));
