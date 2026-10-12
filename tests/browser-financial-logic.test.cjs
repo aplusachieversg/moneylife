@@ -379,6 +379,103 @@ async function run(name, fn) {
     return '100 GC transfer accrued interest; editing to 150 GC recalculated interest and balance (400→350); deleting it cleared fund principal/interest and restored 500 GC';
   });
 
+
+  await run('Multiple dated savings transfers and partial withdrawal recalculate daily compound interest after edit/delete', async browser => {
+    const { page, context } = await freshPage(browser, { budget: 0, openingBalance: 500, monthlyManual: {}, transactions: [], goals: [], fixedDeposits: [], xp: 0, answered: [] });
+    await go(page, 'save');
+    await page.locator('#goalname').fill('Multi-date Compound Interest Test');
+    await page.locator('#goaltarget').fill('1000');
+    await page.locator('#goalsaved').fill('0');
+    await page.locator('#savegoal').click();
+    let d = await state(page);
+    let goal = d.goals.find(g => g.name === 'Multi-date Compound Interest Test');
+    assert.ok(goal, 'goal should be created');
+
+    async function clickPrompt(selector, amount) {
+      page.once('dialog', dialog => dialog.accept(String(amount)));
+      await page.locator(selector).click();
+    }
+    await go(page, 'home');
+    await clickPrompt('#homegoals [data-add-save="' + goal.id + '"]', 100);
+    await clickPrompt('#homegoals [data-add-save="' + goal.id + '"]', 200);
+    await clickPrompt('#homegoals [data-withdraw-save="' + goal.id + '"]', 50);
+    d = await state(page);
+    let transfers = d.transactions.filter(t => t.goalId === goal.id && t.type === 'saving').sort((a,b)=>a.id.localeCompare(b.id));
+    let withdrawal = d.transactions.find(t => t.goalId === goal.id && t.type === 'saving_out');
+    assert.equal(transfers.length, 2);
+    assert.ok(withdrawal, 'partial withdrawal should be recorded');
+
+    const dates = await page.evaluate(() => {
+      function fmt(d) { return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
+      const d1=new Date(); d1.setDate(d1.getDate()-10);
+      const d2=new Date(); d2.setDate(d2.getDate()-8);
+      const d3=new Date(); d3.setDate(d3.getDate()-6);
+      return { first:fmt(d1), second:fmt(d2), withdrawal:fmt(d3), editSecond:fmt(new Date(d1.getTime()+86400000)) };
+    });
+    // Give the test a deterministic history: day 1 +100, day 3 +200, day 5 -50.
+    await page.evaluate(({ key, goalId, dates }) => {
+      const x=JSON.parse(localStorage.getItem(key));
+      const txs=x.transactions.filter(t=>t.goalId===goalId);
+      const ins=txs.filter(t=>t.type==='saving').sort((a,b)=>a.id.localeCompare(b.id));
+      const out=txs.find(t=>t.type==='saving_out');
+      ins[0].date=dates.first; ins[1].date=dates.second; out.date=dates.withdrawal;
+      const g=x.goals.find(v=>v.id===goalId); g.interestStartDate=dates.first;
+      localStorage.setItem(key,JSON.stringify(x));
+    }, { key: KEY, goalId: goal.id, dates });
+    await page.reload();
+
+    function expectedBalance(start, end, txs) {
+      let balance=0;
+      const d=new Date(start+'T00:00:00Z'), last=new Date(end+'T00:00:00Z');
+      while(d<=last) {
+        balance=Math.max(0,balance)*(1+0.0088/365);
+        const key=d.toISOString().slice(0,10);
+        for(const t of txs.filter(v=>v.date===key)) balance += t.type==='saving'?t.amount:-t.amount;
+        d.setUTCDate(d.getUTCDate()+1);
+      }
+      return Math.max(0,balance);
+    }
+    const endDate=await page.evaluate(()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')});
+    d=await state(page); goal=d.goals.find(g=>g.id===goal.id);
+    let txs=d.transactions.filter(t=>t.goalId===goal.id && ['saving','saving_out'].includes(t.type));
+    let expected=expectedBalance(dates.first,endDate,txs);
+    assert.ok(Math.abs(goal.saved-expected)<0.00001,'initial multi-date balance mismatch: expected '+expected+', got '+goal.saved);
+    assert.match(await accountBalanceText(page),/250\.00 GC/);
+
+    // Edit the second transfer's date using the actual transaction editor prompt flow.
+    const secondTx=txs.filter(t=>t.type==='saving').find(t=>t.amount===200);
+    await go(page,'records');
+    const promptValues=['Second transfer rescheduled','200',dates.editSecond,'Savings'];
+    page.on('dialog',async dialog=>{
+      if(dialog.type()==='prompt') await dialog.accept(promptValues.shift() ?? '');
+      else await dialog.accept();
+    });
+    await page.locator('#alltx [data-edit-tx="'+secondTx.id+'"]').click();
+    await page.reload();
+    d=await state(page); goal=d.goals.find(g=>g.id===goal.id);
+    txs=d.transactions.filter(t=>t.goalId===goal.id && ['saving','saving_out'].includes(t.type));
+    expected=expectedBalance(dates.first,endDate,txs);
+    assert.equal(txs.find(t=>t.id===secondTx.id).date,dates.editSecond);
+    assert.ok(Math.abs(goal.saved-expected)<0.00001,'edited date should recalculate historical interest: expected '+expected+', got '+goal.saved);
+    assert.match(await accountBalanceText(page),/250\.00 GC/);
+
+    // Delete the first 100 GC transfer and verify the remaining 200 GC transfer and 50 GC withdrawal.
+    await go(page,'records');
+    const firstTx=txs.find(t=>t.type==='saving' && t.amount===100);
+    await page.locator('#alltx [data-del-tx="'+firstTx.id+'"]').click();
+    await page.reload();
+    d=await state(page); goal=d.goals.find(g=>g.id===goal.id);
+    txs=d.transactions.filter(t=>t.goalId===goal.id && ['saving','saving_out'].includes(t.type));
+    expected=expectedBalance(dates.first,endDate,txs);
+    assert.equal(d.transactions.some(t=>t.id===firstTx.id),false);
+    assert.ok(Math.abs(goal.saved-expected)<0.00001,'after deleting first transfer, interest should recalculate from remaining ledger: expected '+expected+', got '+goal.saved);
+    assert.ok(Math.abs(goal.saved)>0,'remaining transfer should leave a positive fund balance after partial withdrawal');
+    assert.match(await accountBalanceText(page),/350\.00 GC/);
+    assert.match(await page.locator('#allgoals').innerText(),/Fund balance/);
+    await context.close();
+    return '100→200 GC dated transfers and 50 GC partial withdrawal; date edit recomputed daily compounding; deleting first transfer recalculated goal balance while account balance reconciled 500→250→350 GC';
+  });
+
   if (process.exitCode) process.exit(1);
   console.log('All Money Life browser financial logic tests passed.');
 })();
