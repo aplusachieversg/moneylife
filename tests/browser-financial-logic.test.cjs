@@ -226,7 +226,6 @@ async function run(name, fn) {
     const editDialogs = ['Edited expense', '250', tx.date, tx.category || 'Other'];
     page.on('dialog', async dialog => {
       const value = editDialogs.shift();
-      console.log('EDIT DIALOG | ' + dialog.type() + ' | ' + dialog.message() + ' | value=' + (value === undefined ? '<default>' : value));
       if (value === undefined) await dialog.accept();
       else await dialog.accept(value);
     });
