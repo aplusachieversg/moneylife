@@ -212,6 +212,97 @@ async function run(name, fn) {
     return 'future-date backup rejected; original budget=50 and balance=200.00 GC unchanged after reload';
   });
 
+
+  await run('Editing and deleting transactions keeps ledger and balance consistent', async browser => {
+    const { page, context } = await freshPage(browser, { budget: 0, openingBalance: 1000, monthlyManual: {}, transactions: [], goals: [], fixedDeposits: [], xp: 0, answered: [] });
+    await addTransaction(page, 'expense', 'Test expense', 200);
+    await page.reload();
+    assert.match(await accountBalanceText(page), /800\.00 GC/);
+    let d = await state(page);
+    const tx = d.transactions.find(t => t.name === 'Test expense');
+    assert.ok(tx, 'expense should exist before editing');
+
+    await go(page, 'records');
+    const editDialogs = ['Edited expense', '250', tx.date, tx.category || 'Other'];
+    page.on('dialog', async dialog => {
+      const value = editDialogs.shift();
+      if (value === undefined) await dialog.accept();
+      else await dialog.accept(value);
+    });
+    await page.locator('[data-edit-tx="' + tx.id + '"]').click();
+    await page.reload();
+    d = await state(page);
+    const edited = d.transactions.find(t => t.id === tx.id);
+    assert.equal(edited.name, 'Edited expense');
+    assert.equal(edited.amount, 250);
+    assert.match(await accountBalanceText(page), /750\.00 GC/);
+    assert.match((await page.locator('#records').innerText()), /Edited expense/);
+
+    await go(page, 'records');
+    page.once('dialog', dialog => dialog.accept());
+    await page.locator('[data-del-tx="' + tx.id + '"]').click();
+    await page.reload();
+    d = await state(page);
+    assert.equal(d.transactions.some(t => t.id === tx.id), false);
+    assert.match(await accountBalanceText(page), /1,000\.00 GC/);
+    assert.doesNotMatch(await page.locator('#records').innerText(), /Edited expense/);
+    await context.close();
+    return 'expense edited 200→250; balance 800→750; deleting it removed the ledger entry and restored 1,000.00 GC';
+  });
+
+  await run('Savings interest accrues and closing a goal reconciles balance and records', async browser => {
+    const { page, context } = await freshPage(browser, { budget: 0, openingBalance: 500, monthlyManual: {}, transactions: [], goals: [], fixedDeposits: [], xp: 0, answered: [] });
+    await go(page, 'save');
+    await page.locator('#goalname').fill('Interest Test Goal');
+    await page.locator('#goaltarget').fill('500');
+    await page.locator('#goalsaved').fill('100');
+    await page.locator('#savegoal').click();
+    let d = await state(page);
+    let goal = d.goals[0];
+    assert.ok(goal, 'goal should be created');
+    assert.equal(goal.openingSaved, 100);
+
+    // Put the interest start date two calendar days back to exercise daily compounding deterministically.
+    await page.evaluate(({ key, id }) => {
+      const x = JSON.parse(localStorage.getItem(key));
+      const dt = new Date(); dt.setDate(dt.getDate() - 2);
+      const date = dt.getFullYear() + '-' + String(dt.getMonth()+1).padStart(2,'0') + '-' + String(dt.getDate()).padStart(2,'0');
+      const g = x.goals.find(v => v.id === id);
+      g.interestStartDate = date;
+      localStorage.setItem(key, JSON.stringify(x));
+    }, { key: KEY, id: goal.id });
+    await page.reload();
+    d = await state(page);
+    goal = d.goals.find(g => g.id === goal.id);
+    const expected = 100 * Math.pow(1 + 0.0088 / 365, 3);
+    assert.ok(Math.abs(goal.saved - expected) < 0.00001, 'goal balance should include daily compound interest: expected ' + expected + ', got ' + goal.saved);
+    assert.ok(goal.saved > 100, 'interest should be positive');
+    assert.match(await page.locator('#allgoals').innerText(), /Estimated interest/);
+
+    const accruedBalance = goal.saved;
+    await go(page, 'save');
+    page.once('dialog', dialog => dialog.accept());
+    await page.locator('[data-end-goal="' + goal.id + '"]').click();
+    await page.reload();
+    d = await state(page);
+    goal = d.goals.find(g => g.id === goal.id);
+    assert.equal(goal.closed, true);
+    assert.equal(goal.saved, 0);
+    assert.equal(goal.closedBalance, Math.round(accruedBalance * 100) / 100);
+    const closure = d.transactions.find(t => t.goalId === goal.id && t.category === 'Fund Closure Withdrawal');
+    assert.ok(closure, 'closure should create a linked ledger record');
+    assert.equal(closure.type, 'saving_out');
+    assert.equal(closure.amount, goal.closedBalance);
+    assert.match(await accountBalanceText(page), new RegExp((500 + goal.closedBalance - 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' GC'));
+    const goalText = await page.locator('#allgoals').innerText();
+    assert.match(goalText, /Closed/);
+    assert.match(goalText, new RegExp(goal.closedBalance.toFixed(2)));
+    assert.doesNotMatch(goalText, /Transfer In/);
+    assert.doesNotMatch(goalText, /Close Goal/);
+    await context.close();
+    return 'daily interest accrued; closure locked the goal, stored rounded closed balance, created matching withdrawal ledger entry, and reconciled account balance';
+  });
+
   if (process.exitCode) process.exit(1);
   console.log('All Money Life browser financial logic tests passed.');
 })();
