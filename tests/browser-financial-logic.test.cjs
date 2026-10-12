@@ -302,6 +302,84 @@ async function run(name, fn) {
     return 'daily interest accrued; closure locked the goal, stored rounded closed balance, created matching withdrawal ledger entry, and reconciled account balance';
   });
 
+
+  await run('Editing and deleting a savings transfer recalculates principal, interest, and available balance', async browser => {
+    const { page, context } = await freshPage(browser, { budget: 0, openingBalance: 500, monthlyManual: {}, transactions: [], goals: [], fixedDeposits: [], xp: 0, answered: [] });
+    await go(page, 'save');
+    await page.locator('#goalname').fill('Transfer Edit Interest Test');
+    await page.locator('#goaltarget').fill('500');
+    await page.locator('#goalsaved').fill('0');
+    await page.locator('#savegoal').click();
+    let d = await state(page);
+    let goal = d.goals.find(g => g.name === 'Transfer Edit Interest Test');
+    assert.ok(goal, 'savings goal should be created');
+
+    await go(page, 'home');
+    page.once('dialog', dialog => dialog.accept('100'));
+    await page.locator('#homegoals [data-add-save="' + goal.id + '"]').click();
+    d = await state(page);
+    let tx = d.transactions.find(t => t.goalId === goal.id && t.type === 'saving');
+    assert.ok(tx, '100 GC savings transfer should be recorded');
+    assert.equal(tx.amount, 100);
+    assert.match(await accountBalanceText(page), /400\.00 GC/);
+
+    const startDate = await page.evaluate(() => {
+      const dt = new Date(); dt.setDate(dt.getDate() - 2);
+      return dt.getFullYear() + '-' + String(dt.getMonth()+1).padStart(2,'0') + '-' + String(dt.getDate()).padStart(2,'0');
+    });
+    await page.evaluate(({ key, goalId, txId, startDate }) => {
+      const x = JSON.parse(localStorage.getItem(key));
+      const g = x.goals.find(v => v.id === goalId);
+      const t = x.transactions.find(v => v.id === txId);
+      g.interestStartDate = startDate;
+      t.date = startDate;
+      localStorage.setItem(key, JSON.stringify(x));
+    }, { key: KEY, goalId: goal.id, txId: tx.id, startDate });
+    await page.reload();
+
+    let expected100 = 100 * Math.pow(1 + 0.0088 / 365, 2);
+    d = await state(page);
+    goal = d.goals.find(g => g.id === goal.id);
+    assert.ok(Math.abs(goal.saved - expected100) < 0.00001, '100 GC transfer should earn two days of daily compound interest');
+    assert.match(await accountBalanceText(page), /400\.00 GC/);
+
+    await go(page, 'records');
+    const prompts = ['Edited savings transfer', '150', startDate, 'Savings'];
+    page.on('dialog', async dialog => {
+      if (dialog.type() === 'prompt') {
+        const value = prompts.shift();
+        await dialog.accept(value === undefined ? '' : value);
+      } else {
+        await dialog.accept();
+      }
+    });
+    await page.locator('#alltx [data-edit-tx="' + tx.id + '"]').click();
+    await page.reload();
+    d = await state(page);
+    tx = d.transactions.find(t => t.id === tx.id);
+    goal = d.goals.find(g => g.id === goal.id);
+    const expected150 = 150 * Math.pow(1 + 0.0088 / 365, 2);
+    assert.equal(tx.amount, 150);
+    assert.equal(tx.name, 'Edited savings transfer');
+    assert.ok(Math.abs(goal.saved - expected150) < 0.00001, 'interest must recalculate from edited 150 GC principal; expected ' + expected150 + ', got ' + goal.saved);
+    assert.ok(goal.saved > expected150 - 0.00001 && goal.saved < expected150 + 0.00001);
+    assert.match(await accountBalanceText(page), /350\.00 GC/);
+    assert.match(await page.locator('#allgoals').innerText(), /Edited savings transfer|Estimated interest/);
+
+    await go(page, 'records');
+    page.once('dialog', dialog => dialog.accept());
+    await page.locator('#alltx [data-del-tx="' + tx.id + '"]').click();
+    await page.reload();
+    d = await state(page);
+    goal = d.goals.find(g => g.id === goal.id);
+    assert.equal(d.transactions.some(t => t.id === tx.id), false);
+    assert.ok(Math.abs(goal.saved) < 0.000001, 'deleting the only transfer should reset fund balance and accrued interest to zero');
+    assert.match(await accountBalanceText(page), /500\.00 GC/);
+    assert.match(await page.locator('#allgoals').innerText(), /Fund balance 0\.00/);
+    await context.close();
+    return '100 GC transfer accrued interest; editing to 150 GC recalculated interest and balance (400→350); deleting it cleared fund principal/interest and restored 500 GC';
+  });
+
   if (process.exitCode) process.exit(1);
   console.log('All Money Life browser financial logic tests passed.');
 })();
