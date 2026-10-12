@@ -85,7 +85,7 @@ async function run(name, fn) {
     await page.reload();
     assert.match(await accountBalanceText(page), /0\.00 GC/);
     await context.close();
-    return 'budget=0, balance=0, transactions/goals/deposits cleared, game keys removed after reload';
+    return 'budget=0, balance=0, transactions/goals/deposits cleared and challenge progress reset after reload';
   });
 
   await run('Changing planned budget does not change account balance', async browser => {
@@ -127,6 +127,7 @@ async function run(name, fn) {
     await page.reload();
     const created = (await state(page)).goals[0];
     assert.ok(created, 'goal should persist after reload');
+    await go(page, 'save');
     const transferButton = page.locator('#allgoals [data-add-save="' + created.id + '"]').first();
     page.once('dialog', d => d.accept('100'));
     await transferButton.click();
