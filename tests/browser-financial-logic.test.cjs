@@ -77,7 +77,11 @@ async function run(name, fn) {
     assert.equal(d.goals.length, 0);
     assert.equal(d.fixedDeposits.length, 0);
     assert.equal(await page.evaluate(k => localStorage.getItem(k), INVEST_KEY), null);
-    assert.equal(await page.evaluate(k => localStorage.getItem(k), CHALLENGE_KEY), null);
+    const challenge = await page.evaluate(k => JSON.parse(localStorage.getItem(k) || 'null'), CHALLENGE_KEY);
+    assert.ok(challenge, 'budget challenge should return to its default state');
+    assert.equal(challenge.started, false);
+    assert.equal(challenge.done, false);
+    assert.equal(challenge.round, 0);
     await page.reload();
     assert.match(await accountBalanceText(page), /0\.00 GC/);
     await context.close();
@@ -123,7 +127,7 @@ async function run(name, fn) {
     await page.reload();
     const created = (await state(page)).goals[0];
     assert.ok(created, 'goal should persist after reload');
-    const transferButton = page.locator('[data-add-save="' + created.id + '"]');
+    const transferButton = page.locator('#allgoals [data-add-save="' + created.id + '"]').first();
     page.once('dialog', d => d.accept('100'));
     await transferButton.click();
     await page.reload();
@@ -145,6 +149,7 @@ async function run(name, fn) {
     assert.match(await accountBalanceText(page), /400\.00 GC/);
     const deposit = (await state(page)).fixedDeposits[0];
     assert.ok(deposit && !deposit.withdrawn);
+    await go(page, 'fixeddeposit');
     page.once('dialog', d => d.accept());
     await page.locator('[data-fd-cancel="' + deposit.id + '"]').click();
     await page.reload();
