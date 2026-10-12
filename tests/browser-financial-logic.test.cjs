@@ -192,10 +192,11 @@ async function run(name, fn) {
       return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
     });
     const backup = { budget: 999, openingBalance: 999, monthlyManual: {}, transactions: [{ id: 'future-tx', type: 'income', name: 'Future income', amount: 10, date: futureDate, category: 'Income' }], goals: [], fixedDeposits: [], xp: 0, answered: [] };
-    let alertText = '';
-    page.once('dialog', async dialog => { alertText = dialog.message; await dialog.accept(); });
+    const dialogPromise = page.waitForEvent('dialog');
     await page.locator('#importfile').setInputFiles({ name: 'future-transaction.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(backup)) });
-    await page.waitForFunction(() => document.visibilityState === 'visible');
+    const dialog = await dialogPromise;
+    const alertText = dialog.message();
+    await dialog.accept();
     assert.match(alertText, /future-dated transactions are not allowed/i);
     assert.equal(await page.evaluate(key => localStorage.getItem(key), KEY), before);
     await page.reload();
